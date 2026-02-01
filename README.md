@@ -39,11 +39,13 @@ python main.py
 |------|-------------|
 | `--dry-run` | Preview what would be created without making API calls |
 | `--position top\|bottom` | Where to place the new list (default: top) |
+| `--week N` | Create list for week N (1-53). Defaults to current week. |
 
 Examples:
 ```bash
 python main.py --dry-run              # Preview changes
 python main.py --position bottom      # Add list at bottom of board
+python main.py --week 10              # Create list for week 10
 ```
 
 ## Cron Setup
