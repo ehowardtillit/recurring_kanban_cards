@@ -200,32 +200,44 @@ class WeeklyListCreator:
         "sunday": 6
     }
 
-    def __init__(self, client: TrelloAPIClient, dry_run: bool = False, position: str = "top"):
+    def __init__(self, client: TrelloAPIClient, dry_run: bool = False, position: str = "top", week_number: Optional[int] = None):
         """Initialize the weekly list creator."""
         self.client = client
         self.dry_run = dry_run
         self.position = position
+        self.week_number = week_number
         self.logger = logging.getLogger(__name__)
 
-    def get_next_week_number(self) -> int:
-        """Get the ISO week number for next week."""
-        next_week = datetime.now() + timedelta(weeks=1)
-        return next_week.isocalendar()[1]
+    def get_current_week_number(self) -> int:
+        """Get the ISO week number for the current week."""
+        return datetime.now().isocalendar()[1]
 
-    def get_next_week_start(self) -> datetime:
-        """Get the datetime for the start of next week (Monday at 00:00)."""
+    def get_week_start(self, week_number: Optional[int] = None) -> datetime:
+        """Get the datetime for the start of the specified week (Monday at 00:00).
+        
+        If week_number is None, returns the start of the current week.
+        """
         today = datetime.now()
-        days_until_next_monday = (7 - today.weekday()) % 7
-        if days_until_next_monday == 0:
-            days_until_next_monday = 7
-        next_monday = today + timedelta(days=days_until_next_monday)
-        return next_monday.replace(hour=0, minute=0, second=0, microsecond=0)
+        current_week = today.isocalendar()[1]
+        current_year = today.isocalendar()[0]
+        
+        if week_number is None:
+            week_number = current_week
+        
+        # Calculate the Monday of the target week
+        # ISO week 1 is the week containing January 4th
+        jan4 = datetime(current_year, 1, 4)
+        jan4_weekday = jan4.weekday()  # Monday = 0
+        week1_monday = jan4 - timedelta(days=jan4_weekday)
+        target_monday = week1_monday + timedelta(weeks=week_number - 1)
+        
+        return target_monday.replace(hour=0, minute=0, second=0, microsecond=0)
 
     def calculate_due_date(self, day_of_week: str, hour: int, minute: int = 0) -> datetime:
         """Calculate the due date for a card based on day of week, hour, and minute."""
-        next_week_start = self.get_next_week_start()
+        week_start = self.get_week_start(self.week_number)
         day_offset = self.DAYS_OF_WEEK[day_of_week.lower()]
-        due_date = next_week_start + timedelta(days=day_offset, hours=hour, minutes=minute)
+        due_date = week_start + timedelta(days=day_offset, hours=hour, minutes=minute)
         return due_date
 
     def resolve_label_ids(
@@ -244,7 +256,7 @@ class WeeklyListCreator:
 
     def create_weekly_list(self, cards: List[CardTemplate]) -> None:
         """Create a weekly list with predefined cards."""
-        week_number = self.get_next_week_number()
+        week_number = self.week_number if self.week_number else self.get_current_week_number()
         list_name = f"Todo w{week_number:02d}"
         
         self.logger.info(f"Starting weekly list creation: {list_name}")
@@ -337,6 +349,12 @@ def parse_args() -> argparse.Namespace:
         default="top",
         help="Position for the new list (default: top)"
     )
+    parser.add_argument(
+        "--week",
+        type=int,
+        metavar="N",
+        help="Week number to create (1-53). Defaults to current week."
+    )
     return parser.parse_args()
 
 
@@ -364,7 +382,7 @@ def main() -> int:
         
         # Create weekly list
         client = TrelloAPIClient(config)
-        creator = WeeklyListCreator(client, dry_run=args.dry_run, position=args.position)
+        creator = WeeklyListCreator(client, dry_run=args.dry_run, position=args.position, week_number=args.week)
         creator.create_weekly_list(cards)
         
         logger.info("Weekly list creation completed successfully")

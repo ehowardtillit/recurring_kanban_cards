@@ -153,20 +153,34 @@ class TestWeeklyListCreator:
         client.create_card.return_value = "card123"
         return client
 
-    def test_get_next_week_number(self, mock_client):
-        """get_next_week_number returns correct week."""
+    def test_get_current_week_number(self, mock_client):
+        """get_current_week_number returns correct week."""
         creator = WeeklyListCreator(mock_client)
-        week_num = creator.get_next_week_number()
-        expected = (datetime.now() + timedelta(weeks=1)).isocalendar()[1]
+        week_num = creator.get_current_week_number()
+        expected = datetime.now().isocalendar()[1]
         assert week_num == expected
 
-    def test_calculate_due_date(self, mock_client):
-        """calculate_due_date returns correct datetime."""
+    def test_calculate_due_date_current_week(self, mock_client):
+        """calculate_due_date returns correct datetime for current week."""
         creator = WeeklyListCreator(mock_client)
         due = creator.calculate_due_date("monday", 10, 30)
         assert due.weekday() == 0  # Monday
         assert due.hour == 10
         assert due.minute == 30
+
+    def test_calculate_due_date_specific_week(self, mock_client):
+        """calculate_due_date respects specified week number."""
+        creator = WeeklyListCreator(mock_client, week_number=10)
+        due = creator.calculate_due_date("monday", 9, 0)
+        assert due.weekday() == 0  # Monday
+        assert due.isocalendar()[1] == 10  # Week 10
+
+    def test_get_week_start_specific_week(self, mock_client):
+        """get_week_start returns Monday of specified week."""
+        creator = WeeklyListCreator(mock_client)
+        week_start = creator.get_week_start(5)
+        assert week_start.weekday() == 0  # Monday
+        assert week_start.isocalendar()[1] == 5
 
     def test_resolve_label_ids(self, mock_client):
         """resolve_label_ids maps names to IDs."""
@@ -281,6 +295,7 @@ class TestParseArgs:
             args = parse_args()
             assert args.dry_run is False
             assert args.position == "top"
+            assert args.week is None
 
     def test_dry_run_flag(self):
         """--dry-run flag."""
@@ -293,3 +308,9 @@ class TestParseArgs:
         with patch('sys.argv', ['main.py', '--position', 'bottom']):
             args = parse_args()
             assert args.position == "bottom"
+
+    def test_week_number(self):
+        """--week option."""
+        with patch('sys.argv', ['main.py', '--week', '10']):
+            args = parse_args()
+            assert args.week == 10
