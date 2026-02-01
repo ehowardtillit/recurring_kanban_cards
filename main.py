@@ -220,7 +220,8 @@ class TrelloAPIClient:
 class WeeklyListCreator:
     """Creates weekly Trello lists with predefined cards."""
 
-    DAYS_OF_WEEK = {
+    # Days offset from Monday (ISO standard)
+    DAYS_FROM_MONDAY = {
         "monday": 0,
         "tuesday": 1,
         "wednesday": 2,
@@ -229,44 +230,89 @@ class WeeklyListCreator:
         "saturday": 5,
         "sunday": 6
     }
+    
+    # Days offset from Sunday (US standard)
+    DAYS_FROM_SUNDAY = {
+        "sunday": 0,
+        "monday": 1,
+        "tuesday": 2,
+        "wednesday": 3,
+        "thursday": 4,
+        "friday": 5,
+        "saturday": 6
+    }
 
-    def __init__(self, client: TrelloAPIClient, dry_run: bool = False, position: str = "top", week_number: Optional[int] = None):
-        """Initialize the weekly list creator."""
+    def __init__(self, client: TrelloAPIClient, dry_run: bool = False, position: str = "top", week_number: Optional[int] = None, start_day: str = "monday"):
+        """Initialize the weekly list creator.
+        
+        Args:
+            client: Trello API client
+            dry_run: If True, don't make actual API calls
+            position: Position for new list ("top" or "bottom")
+            week_number: Specific week number to create (None = current week)
+            start_day: First day of week ("sunday" or "monday")
+        """
         self.client = client
         self.dry_run = dry_run
         self.position = position
         self.week_number = week_number
+        self.start_day = start_day.lower()
+        if self.start_day not in ("sunday", "monday"):
+            raise ValueError(f"Invalid start_day: {start_day}. Must be 'sunday' or 'monday'")
         self.logger = logging.getLogger(__name__)
 
     def get_current_week_number(self) -> int:
-        """Get the ISO week number for the current week."""
-        return datetime.now().isocalendar()[1]
+        """Get the week number for the current week based on start_day setting."""
+        today = datetime.now()
+        
+        if self.start_day == "monday":
+            # ISO week number (Monday start)
+            return today.isocalendar()[1]
+        else:
+            # Sunday-based week: if today is Sunday, it's already the new week
+            # Shift by 1 day to align with US calendar convention
+            adjusted = today + timedelta(days=1)
+            return adjusted.isocalendar()[1]
 
     def get_week_start(self, week_number: Optional[int] = None) -> datetime:
-        """Get the datetime for the start of the specified week (Monday at 00:00).
+        """Get the datetime for the start of the specified week.
         
         If week_number is None, returns the start of the current week.
+        Start day depends on start_day setting (Sunday or Monday).
         """
         today = datetime.now()
-        current_week = today.isocalendar()[1]
-        current_year = today.isocalendar()[0]
         
         if week_number is None:
-            week_number = current_week
+            week_number = self.get_current_week_number()
         
-        # Calculate the Monday of the target week
-        # ISO week 1 is the week containing January 4th
-        jan4 = datetime(current_year, 1, 4)
-        jan4_weekday = jan4.weekday()  # Monday = 0
-        week1_monday = jan4 - timedelta(days=jan4_weekday)
-        target_monday = week1_monday + timedelta(weeks=week_number - 1)
+        if self.start_day == "monday":
+            # ISO week calculation (Monday start)
+            current_year = today.isocalendar()[0]
+            jan4 = datetime(current_year, 1, 4)
+            jan4_weekday = jan4.weekday()  # Monday = 0
+            week1_monday = jan4 - timedelta(days=jan4_weekday)
+            target_start = week1_monday + timedelta(weeks=week_number - 1)
+        else:
+            # Sunday-based week calculation
+            current_year = today.isocalendar()[0]
+            jan4 = datetime(current_year, 1, 4)
+            jan4_weekday = jan4.weekday()  # Monday = 0
+            week1_monday = jan4 - timedelta(days=jan4_weekday)
+            # Go back 1 day to get Sunday
+            week1_sunday = week1_monday - timedelta(days=1)
+            target_start = week1_sunday + timedelta(weeks=week_number - 1)
         
-        return target_monday.replace(hour=0, minute=0, second=0, microsecond=0)
+        return target_start.replace(hour=0, minute=0, second=0, microsecond=0)
 
     def calculate_due_date(self, day_of_week: str, hour: int, minute: int = 0) -> datetime:
         """Calculate the due date for a card based on day of week, hour, and minute."""
         week_start = self.get_week_start(self.week_number)
-        day_offset = self.DAYS_OF_WEEK[day_of_week.lower()]
+        
+        if self.start_day == "monday":
+            day_offset = self.DAYS_FROM_MONDAY[day_of_week.lower()]
+        else:
+            day_offset = self.DAYS_FROM_SUNDAY[day_of_week.lower()]
+        
         due_date = week_start + timedelta(days=day_offset, hours=hour, minutes=minute)
         return due_date
 
@@ -402,6 +448,12 @@ def parse_args() -> argparse.Namespace:
         metavar="N",
         help="Week number to create (1-53). Defaults to current week."
     )
+    parser.add_argument(
+        "--start-day",
+        choices=["sunday", "monday"],
+        default=os.getenv("WEEK_START_DAY", "monday").lower(),
+        help="First day of the week (default: monday, or WEEK_START_DAY env var)"
+    )
     return parser.parse_args()
 
 
@@ -429,7 +481,7 @@ def main() -> int:
         
         # Create weekly list
         client = TrelloAPIClient(config)
-        creator = WeeklyListCreator(client, dry_run=args.dry_run, position=args.position, week_number=args.week)
+        creator = WeeklyListCreator(client, dry_run=args.dry_run, position=args.position, week_number=args.week, start_day=args.start_day)
         creator.create_weekly_list(cards)
         
         logger.info("Weekly list creation completed successfully")

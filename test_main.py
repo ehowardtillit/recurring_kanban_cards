@@ -403,3 +403,93 @@ class TestParseArgs:
         with patch('sys.argv', ['main.py', '--week', '10']):
             args = parse_args()
             assert args.week == 10
+
+    def test_start_day_default(self):
+        """Default start_day from env or 'monday'."""
+        with patch('sys.argv', ['main.py']):
+            with patch.dict(os.environ, {}, clear=True):
+                args = parse_args()
+                assert args.start_day == "monday"
+
+    def test_start_day_from_env(self):
+        """--start-day defaults to WEEK_START_DAY env var."""
+        with patch('sys.argv', ['main.py']):
+            with patch.dict(os.environ, {'WEEK_START_DAY': 'monday'}):
+                args = parse_args()
+                assert args.start_day == "monday"
+
+    def test_start_day_cli_overrides_env(self):
+        """--start-day CLI overrides env var."""
+        with patch('sys.argv', ['main.py', '--start-day', 'monday']):
+            with patch.dict(os.environ, {'WEEK_START_DAY': 'sunday'}):
+                args = parse_args()
+                assert args.start_day == "monday"
+
+
+class TestWeekStartDay:
+    """Tests for week start day functionality."""
+
+    @pytest.fixture
+    def mock_client(self):
+        """Create a mock client."""
+        client = Mock(spec=TrelloAPIClient)
+        client.list_exists.return_value = False
+        client.create_list.return_value = "list123"
+        client.get_board_labels.return_value = {}
+        client.create_card.return_value = "card123"
+        return client
+
+    def test_monday_start_week_number(self, mock_client):
+        """Monday start uses ISO week number."""
+        with patch('main.datetime') as mock_dt:
+            # Sunday 2025-01-26 - ISO week 4 (Monday-based)
+            mock_dt.now.return_value = datetime(2025, 1, 26, 12, 0)
+            mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
+            
+            creator = WeeklyListCreator(mock_client, start_day="monday")
+            week_num = creator.get_current_week_number()
+            
+            # ISO week: Sunday Jan 26 is in week 4 (week starts Mon Jan 20)
+            assert week_num == 4
+
+    def test_sunday_start_week_number(self, mock_client):
+        """Sunday start calculates week from Sunday."""
+        with patch('main.datetime') as mock_dt:
+            # Sunday 2025-01-26 - Sunday-based week 5 (week starts Jan 26)
+            mock_dt.now.return_value = datetime(2025, 1, 26, 12, 0)
+            mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
+            
+            creator = WeeklyListCreator(mock_client, start_day="sunday")
+            week_num = creator.get_current_week_number()
+            
+            # Sunday-based: Jan 26 is first day of week 5
+            assert week_num == 5
+
+    def test_get_week_start_monday(self, mock_client):
+        """get_week_start with Monday start returns Monday."""
+        creator = WeeklyListCreator(mock_client, start_day="monday")
+        week_start = creator.get_week_start(5)
+        assert week_start.weekday() == 0  # Monday
+
+    def test_get_week_start_sunday(self, mock_client):
+        """get_week_start with Sunday start returns Sunday."""
+        creator = WeeklyListCreator(mock_client, start_day="sunday")
+        week_start = creator.get_week_start(5)
+        assert week_start.weekday() == 6  # Sunday
+
+    def test_invalid_start_day_raises(self, mock_client):
+        """Invalid start_day raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid start_day"):
+            WeeklyListCreator(mock_client, start_day="tuesday")
+
+    def test_calculate_due_date_sunday_start(self, mock_client):
+        """calculate_due_date works correctly with Sunday start."""
+        creator = WeeklyListCreator(mock_client, start_day="sunday", week_number=5)
+        
+        # Sunday should be day 0 of the week
+        due = creator.calculate_due_date("sunday", 10, 0)
+        assert due.weekday() == 6  # Sunday
+        
+        # Monday should be day 1 of the week
+        due = creator.calculate_due_date("monday", 10, 0)
+        assert due.weekday() == 0  # Monday
