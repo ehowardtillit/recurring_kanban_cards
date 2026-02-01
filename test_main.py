@@ -480,7 +480,7 @@ class TestWeekStartDay:
     def test_invalid_start_day_raises(self, mock_client):
         """Invalid start_day raises ValueError."""
         with pytest.raises(ValueError, match="Invalid start_day"):
-            WeeklyListCreator(mock_client, start_day="tuesday")
+            WeeklyListCreator(mock_client, start_day="wednesday")
 
     def test_calculate_due_date_sunday_start(self, mock_client):
         """calculate_due_date works correctly with Sunday start."""
@@ -493,3 +493,38 @@ class TestWeekStartDay:
         # Monday should be day 1 of the week
         due = creator.calculate_due_date("monday", 10, 0)
         assert due.weekday() == 0  # Monday
+
+    def test_saturday_start_week_number(self, mock_client):
+        """Saturday start calculates week from Saturday."""
+        with patch('main.datetime') as mock_dt:
+            # Saturday 2025-01-25 - Saturday-based week 5 (week starts Jan 25)
+            mock_dt.now.return_value = datetime(2025, 1, 25, 12, 0)
+            mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
+            
+            creator = WeeklyListCreator(mock_client, start_day="saturday")
+            week_num = creator.get_current_week_number()
+            
+            # Saturday-based: Jan 25 is first day of week 5
+            assert week_num == 5
+
+    def test_get_week_start_saturday(self, mock_client):
+        """get_week_start with Saturday start returns Saturday."""
+        creator = WeeklyListCreator(mock_client, start_day="saturday")
+        week_start = creator.get_week_start(5)
+        assert week_start.weekday() == 5  # Saturday
+
+    def test_calculate_due_date_saturday_start(self, mock_client):
+        """calculate_due_date works correctly with Saturday start."""
+        creator = WeeklyListCreator(mock_client, start_day="saturday", week_number=5)
+        
+        # Saturday should be day 0 of the week
+        due = creator.calculate_due_date("saturday", 10, 0)
+        assert due.weekday() == 5  # Saturday
+        
+        # Sunday should be day 1 of the week
+        due = creator.calculate_due_date("sunday", 10, 0)
+        assert due.weekday() == 6  # Sunday
+        
+        # Friday should be day 6 of the week
+        due = creator.calculate_due_date("friday", 10, 0)
+        assert due.weekday() == 4  # Friday

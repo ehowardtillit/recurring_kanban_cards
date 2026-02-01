@@ -241,6 +241,17 @@ class WeeklyListCreator:
         "friday": 5,
         "saturday": 6
     }
+    
+    # Days offset from Saturday (Islamic/some Middle Eastern countries)
+    DAYS_FROM_SATURDAY = {
+        "saturday": 0,
+        "sunday": 1,
+        "monday": 2,
+        "tuesday": 3,
+        "wednesday": 4,
+        "thursday": 5,
+        "friday": 6
+    }
 
     def __init__(self, client: TrelloAPIClient, dry_run: bool = False, position: str = "top", week_number: Optional[int] = None, start_day: str = "monday"):
         """Initialize the weekly list creator.
@@ -257,8 +268,8 @@ class WeeklyListCreator:
         self.position = position
         self.week_number = week_number
         self.start_day = start_day.lower()
-        if self.start_day not in ("sunday", "monday"):
-            raise ValueError(f"Invalid start_day: {start_day}. Must be 'sunday' or 'monday'")
+        if self.start_day not in ("saturday", "sunday", "monday"):
+            raise ValueError(f"Invalid start_day: {start_day}. Must be 'saturday', 'sunday', or 'monday'")
         self.logger = logging.getLogger(__name__)
 
     def get_current_week_number(self) -> int:
@@ -268,10 +279,15 @@ class WeeklyListCreator:
         if self.start_day == "monday":
             # ISO week number (Monday start)
             return today.isocalendar()[1]
-        else:
+        elif self.start_day == "sunday":
             # Sunday-based week: if today is Sunday, it's already the new week
             # Shift by 1 day to align with US calendar convention
             adjusted = today + timedelta(days=1)
+            return adjusted.isocalendar()[1]
+        else:
+            # Saturday-based week: if today is Saturday, it's already the new week
+            # Shift by 2 days to align with Saturday start convention
+            adjusted = today + timedelta(days=2)
             return adjusted.isocalendar()[1]
 
     def get_week_start(self, week_number: Optional[int] = None) -> datetime:
@@ -292,7 +308,7 @@ class WeeklyListCreator:
             jan4_weekday = jan4.weekday()  # Monday = 0
             week1_monday = jan4 - timedelta(days=jan4_weekday)
             target_start = week1_monday + timedelta(weeks=week_number - 1)
-        else:
+        elif self.start_day == "sunday":
             # Sunday-based week calculation
             current_year = today.isocalendar()[0]
             jan4 = datetime(current_year, 1, 4)
@@ -301,6 +317,15 @@ class WeeklyListCreator:
             # Go back 1 day to get Sunday
             week1_sunday = week1_monday - timedelta(days=1)
             target_start = week1_sunday + timedelta(weeks=week_number - 1)
+        else:
+            # Saturday-based week calculation
+            current_year = today.isocalendar()[0]
+            jan4 = datetime(current_year, 1, 4)
+            jan4_weekday = jan4.weekday()  # Monday = 0
+            week1_monday = jan4 - timedelta(days=jan4_weekday)
+            # Go back 2 days to get Saturday
+            week1_saturday = week1_monday - timedelta(days=2)
+            target_start = week1_saturday + timedelta(weeks=week_number - 1)
         
         return target_start.replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -310,8 +335,10 @@ class WeeklyListCreator:
         
         if self.start_day == "monday":
             day_offset = self.DAYS_FROM_MONDAY[day_of_week.lower()]
-        else:
+        elif self.start_day == "sunday":
             day_offset = self.DAYS_FROM_SUNDAY[day_of_week.lower()]
+        else:
+            day_offset = self.DAYS_FROM_SATURDAY[day_of_week.lower()]
         
         due_date = week_start + timedelta(days=day_offset, hours=hour, minutes=minute)
         return due_date
@@ -450,7 +477,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--start-day",
-        choices=["sunday", "monday"],
+        choices=["saturday", "sunday", "monday"],
         default=os.getenv("WEEK_START_DAY", "monday").lower(),
         help="First day of the week (default: monday, or WEEK_START_DAY env var)"
     )
