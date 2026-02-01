@@ -9,6 +9,7 @@ import os
 from main import (
     TrelloConfig,
     CardTemplate,
+    ChecklistTemplate,
     TrelloAPIClient,
     WeeklyListCreator,
     load_card_templates,
@@ -74,6 +75,7 @@ class TestCardTemplate:
         assert card.minute == 0
         assert card.labels == []
         assert card.description == ""
+        assert card.checklists == []
 
     def test_with_description(self):
         """Card with description."""
@@ -84,6 +86,34 @@ class TestCardTemplate:
             description="Some details"
         )
         assert card.description == "Some details"
+
+    def test_with_checklists(self):
+        """Card with checklists."""
+        checklist = ChecklistTemplate(name="Tasks", items=["Item 1", "Item 2"])
+        card = CardTemplate(
+            title="Test",
+            day_of_week="monday",
+            hour=10,
+            checklists=[checklist]
+        )
+        assert len(card.checklists) == 1
+        assert card.checklists[0].name == "Tasks"
+        assert card.checklists[0].items == ["Item 1", "Item 2"]
+
+
+class TestChecklistTemplate:
+    """Tests for ChecklistTemplate."""
+
+    def test_create_checklist(self):
+        """Create a valid checklist."""
+        checklist = ChecklistTemplate(name="My List", items=["A", "B", "C"])
+        assert checklist.name == "My List"
+        assert checklist.items == ["A", "B", "C"]
+
+    def test_default_items(self):
+        """Checklist with no items defaults to empty list."""
+        checklist = ChecklistTemplate(name="Empty")
+        assert checklist.items == []
 
 
 class TestTrelloAPIClient:
@@ -139,6 +169,23 @@ class TestTrelloAPIClient:
         call_args = mock_request.call_args
         assert call_args[1]["params"]["desc"] == "Details here"
 
+    @patch.object(TrelloAPIClient, '_make_request')
+    def test_create_checklist(self, mock_request, client):
+        """create_checklist returns checklist ID."""
+        mock_request.return_value = {"id": "checklist123"}
+        result = client.create_checklist("card123", "My Checklist")
+        assert result == "checklist123"
+        call_args = mock_request.call_args
+        assert call_args[1]["params"]["idCard"] == "card123"
+        assert call_args[1]["params"]["name"] == "My Checklist"
+
+    @patch.object(TrelloAPIClient, '_make_request')
+    def test_add_checklist_item(self, mock_request, client):
+        """add_checklist_item returns item ID."""
+        mock_request.return_value = {"id": "item123"}
+        result = client.add_checklist_item("checklist123", "Task item")
+        assert result == "item123"
+
 
 class TestWeeklyListCreator:
     """Tests for WeeklyListCreator."""
@@ -151,6 +198,8 @@ class TestWeeklyListCreator:
         client.create_list.return_value = "list123"
         client.get_board_labels.return_value = {"Work": "label1"}
         client.create_card.return_value = "card123"
+        client.create_checklist.return_value = "checklist123"
+        client.add_checklist_item.return_value = "item123"
         return client
 
     def test_get_current_week_number(self, mock_client):
@@ -213,6 +262,20 @@ class TestWeeklyListCreator:
         mock_client.create_list.assert_called_once()
         assert mock_client.create_card.call_count == 2
 
+    def test_create_weekly_list_with_checklists(self, mock_client):
+        """Creates cards with checklists."""
+        creator = WeeklyListCreator(mock_client)
+        checklist = ChecklistTemplate(name="Tasks", items=["Item 1", "Item 2"])
+        cards = [
+            CardTemplate(title="Card1", day_of_week="monday", hour=10, checklists=[checklist]),
+        ]
+        
+        creator.create_weekly_list(cards)
+        
+        mock_client.create_card.assert_called_once()
+        mock_client.create_checklist.assert_called_once_with("card123", "Tasks")
+        assert mock_client.add_checklist_item.call_count == 2
+
     def test_dry_run_no_api_calls(self, mock_client):
         """Dry run doesn't make API calls."""
         creator = WeeklyListCreator(mock_client, dry_run=True)
@@ -259,6 +322,32 @@ cards:
             assert len(cards) == 1
             assert cards[0].title == "Test Card"
             assert cards[0].description == "Details"
+            
+            os.unlink(f.name)
+
+    def test_load_yaml_with_checklists(self):
+        """Load cards with checklists from YAML."""
+        yaml_content = """
+cards:
+  - title: "Task with checklist"
+    day_of_week: "monday"
+    hour: 9
+    checklists:
+      - name: "Subtasks"
+        items:
+          - "Step 1"
+          - "Step 2"
+"""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False, encoding='utf-8') as f:
+            f.write(yaml_content)
+            f.flush()
+            
+            cards = load_card_templates(Path(f.name))
+            
+            assert len(cards) == 1
+            assert len(cards[0].checklists) == 1
+            assert cards[0].checklists[0].name == "Subtasks"
+            assert cards[0].checklists[0].items == ["Step 1", "Step 2"]
             
             os.unlink(f.name)
 

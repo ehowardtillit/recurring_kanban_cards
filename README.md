@@ -48,6 +48,27 @@ python main.py --position bottom      # Add list at bottom of board
 python main.py --week 10              # Create list for week 10
 ```
 
+## Card Configuration
+
+Cards are defined in `config/cards.yaml`. Each card supports:
+
+```yaml
+cards:
+  - title: "Weekly planning"
+    day_of_week: "monday"
+    hour: 9
+    minute: 0
+    labels:
+      - "Work"
+    description: "Optional card description"
+    checklists:
+      - name: "Tasks"
+        items:
+          - "Review last week"
+          - "Set goals"
+          - "Prioritize"
+```
+
 ## Cron Setup
 
 ```bash

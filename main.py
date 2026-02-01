@@ -49,6 +49,13 @@ class TrelloConfig:
 
 
 @dataclass
+class ChecklistTemplate:
+    """Template for a Trello checklist."""
+    name: str
+    items: List[str] = field(default_factory=list)
+
+
+@dataclass
 class CardTemplate:
     """Template for creating a Trello card."""
     title: str
@@ -57,6 +64,7 @@ class CardTemplate:
     minute: int = 0
     labels: List[str] = field(default_factory=list)
     description: str = ""
+    checklists: List[ChecklistTemplate] = field(default_factory=list)
 
     def __post_init__(self):
         """Validate card template data."""
@@ -186,6 +194,28 @@ class TrelloAPIClient:
         data = self._make_request(method="POST", endpoint="cards", params=params)
         return data["id"]
 
+    def create_checklist(self, card_id: str, name: str) -> str:
+        """Create a checklist on a card."""
+        self.logger.info(f"Creating checklist: {name}")
+        data = self._make_request(
+            method="POST",
+            endpoint="checklists",
+            params={
+                "idCard": card_id,
+                "name": name
+            }
+        )
+        return data["id"]
+
+    def add_checklist_item(self, checklist_id: str, name: str) -> str:
+        """Add an item to a checklist."""
+        data = self._make_request(
+            method="POST",
+            endpoint=f"checklists/{checklist_id}/checkItems",
+            params={"name": name}
+        )
+        return data["id"]
+
 
 class WeeklyListCreator:
     """Creates weekly Trello lists with predefined cards."""
@@ -271,6 +301,8 @@ class WeeklyListCreator:
             for card in cards:
                 due_date = self.calculate_due_date(card.day_of_week, card.hour, card.minute)
                 self.logger.info(f"[DRY-RUN] Would create card: {card.title} (due: {due_date})")
+                for checklist in card.checklists:
+                    self.logger.info(f"[DRY-RUN]   Would add checklist: {checklist.name} ({len(checklist.items)} items)")
             self.logger.info(f"[DRY-RUN] Would create {len(cards)} cards total")
             return
         
@@ -286,13 +318,19 @@ class WeeklyListCreator:
             due_date = self.calculate_due_date(card.day_of_week, card.hour, card.minute)
             label_ids = self.resolve_label_ids(card.labels, board_labels)
             
-            self.client.create_card(
+            card_id = self.client.create_card(
                 list_id=list_id,
                 name=card.title,
                 due_date=due_date,
                 label_ids=label_ids,
                 description=card.description
             )
+            
+            # Create checklists for this card
+            for checklist in card.checklists:
+                checklist_id = self.client.create_checklist(card_id, checklist.name)
+                for item in checklist.items:
+                    self.client.add_checklist_item(checklist_id, item)
         
         self.logger.info(f"Successfully created {len(cards)} cards in list {list_name}")
 
@@ -307,13 +345,22 @@ def load_card_templates(yaml_path: Path) -> List[CardTemplate]:
     
     cards = []
     for item in data.get("cards", []):
+        # Parse checklists
+        checklists = []
+        for cl in item.get("checklists", []):
+            checklists.append(ChecklistTemplate(
+                name=cl["name"],
+                items=cl.get("items", [])
+            ))
+        
         cards.append(CardTemplate(
             title=item["title"],
             day_of_week=item["day_of_week"],
             hour=item["hour"],
             minute=item.get("minute", 0),
             labels=item.get("labels", []),
-            description=item.get("description", "")
+            description=item.get("description", ""),
+            checklists=checklists
         ))
     
     return cards
