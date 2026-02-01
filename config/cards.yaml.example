@@ -8,6 +8,7 @@ cards:
     minute: 0
     labels:
       - "Work"
+    description: "Review goals and plan the week ahead"
 
   - title: "Team standup"
     day_of_week: "tuesday"
@@ -23,3 +24,4 @@ cards:
     minute: 0
     labels:
       - "Work"
+    description: "End of week review"
