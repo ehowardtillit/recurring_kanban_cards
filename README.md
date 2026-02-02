@@ -84,3 +84,10 @@ crontab -e
 ```bash
 pytest test_main.py -v
 ```
+
+## License
+
+This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0-or-later).
+See the full license text in the [`LICENSE`](LICENSE) file or at https://www.gnu.org/licenses/agpl-3.0.html.
+
+For commercial licensing inquiries or special agreements, contact the project owner.

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 ehowardtillit
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """
 Trello Weekly List Creator
 Creates weekly Trello lists with predefined cards.
