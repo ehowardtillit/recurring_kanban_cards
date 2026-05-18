@@ -5,6 +5,7 @@
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 import tempfile
 import os
@@ -224,10 +225,10 @@ class TestWeeklyListCreator:
         return client
 
     def test_get_current_week_number(self, mock_client):
-        """get_current_week_number returns correct week."""
+        """get_current_week_number returns correct week (UTC default)."""
         creator = WeeklyListCreator(mock_client)
         week_num = creator.get_current_week_number()
-        expected = datetime.now().isocalendar()[1]
+        expected = datetime.now(ZoneInfo("UTC")).isocalendar()[1]
         assert week_num == expected
 
     def test_calculate_due_date_current_week(self, mock_client):
@@ -462,29 +463,21 @@ class TestWeekStartDay:
 
     def test_monday_start_week_number(self, mock_client):
         """Monday start uses ISO week number."""
-        with patch('main.datetime') as mock_dt:
-            # Sunday 2025-01-26 - ISO week 4 (Monday-based)
-            mock_dt.now.return_value = datetime(2025, 1, 26, 12, 0)
-            mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
-            
-            creator = WeeklyListCreator(mock_client, start_day="monday")
+        creator = WeeklyListCreator(mock_client, start_day="monday")
+        # Sunday 2025-01-26 is ISO week 4 (Monday-based, week starts Jan 20)
+        fixed = datetime(2025, 1, 26, 12, 0, tzinfo=ZoneInfo("UTC"))
+        with patch.object(creator, '_now', return_value=fixed):
             week_num = creator.get_current_week_number()
-            
-            # ISO week: Sunday Jan 26 is in week 4 (week starts Mon Jan 20)
-            assert week_num == 4
+        assert week_num == 4
 
     def test_sunday_start_week_number(self, mock_client):
         """Sunday start calculates week from Sunday."""
-        with patch('main.datetime') as mock_dt:
-            # Sunday 2025-01-26 - Sunday-based week 5 (week starts Jan 26)
-            mock_dt.now.return_value = datetime(2025, 1, 26, 12, 0)
-            mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
-            
-            creator = WeeklyListCreator(mock_client, start_day="sunday")
+        creator = WeeklyListCreator(mock_client, start_day="sunday")
+        # Sunday 2025-01-26 is the first day of Sunday-based week 5
+        fixed = datetime(2025, 1, 26, 12, 0, tzinfo=ZoneInfo("UTC"))
+        with patch.object(creator, '_now', return_value=fixed):
             week_num = creator.get_current_week_number()
-            
-            # Sunday-based: Jan 26 is first day of week 5
-            assert week_num == 5
+        assert week_num == 5
 
     def test_get_week_start_monday(self, mock_client):
         """get_week_start with Monday start returns Monday."""
@@ -517,16 +510,12 @@ class TestWeekStartDay:
 
     def test_saturday_start_week_number(self, mock_client):
         """Saturday start calculates week from Saturday."""
-        with patch('main.datetime') as mock_dt:
-            # Saturday 2025-01-25 - Saturday-based week 5 (week starts Jan 25)
-            mock_dt.now.return_value = datetime(2025, 1, 25, 12, 0)
-            mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
-            
-            creator = WeeklyListCreator(mock_client, start_day="saturday")
+        creator = WeeklyListCreator(mock_client, start_day="saturday")
+        # Saturday 2025-01-25 is the first day of Saturday-based week 5
+        fixed = datetime(2025, 1, 25, 12, 0, tzinfo=ZoneInfo("UTC"))
+        with patch.object(creator, '_now', return_value=fixed):
             week_num = creator.get_current_week_number()
-            
-            # Saturday-based: Jan 25 is first day of week 5
-            assert week_num == 5
+        assert week_num == 5
 
     def test_get_week_start_saturday(self, mock_client):
         """get_week_start with Saturday start returns Saturday."""
@@ -558,16 +547,13 @@ class TestSetupLogging:
         """setup_logging is a no-op when the root logger already has handlers."""
         import logging as _logging
         root = _logging.getLogger()
-        # Clean slate
         original_handlers = root.handlers[:]
         original_level = root.level
         try:
-            # Add a sentinel handler first
             sentinel = _logging.NullHandler()
             root.addHandler(sentinel)
             handler_count_before = len(root.handlers)
 
-            # Calling setup_logging should not add more handlers
             from main import setup_logging
             setup_logging(tmp_path)
 
@@ -611,3 +597,90 @@ class TestMainSessionCleanup:
         mock_client = Mock()
         self._run_main(mock_client, create_weekly_list_side_effect=RuntimeError("boom"))
         mock_client.close.assert_called_once()
+
+
+class TestTimezone:
+    """Tests for timezone-aware due date handling."""
+
+    @pytest.fixture
+    def mock_client(self):
+        client = Mock(spec=TrelloAPIClient)
+        client.list_exists.return_value = False
+        client.create_list.return_value = "list123"
+        client.get_board_labels.return_value = {}
+        client.create_card.return_value = "card123"
+        return client
+
+    def test_invalid_timezone_raises(self, mock_client):
+        """Invalid IANA timezone name raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid timezone"):
+            WeeklyListCreator(mock_client, timezone="Not/ATimezone")
+
+    def test_due_date_is_timezone_aware(self, mock_client):
+        """calculate_due_date returns a timezone-aware datetime."""
+        creator = WeeklyListCreator(mock_client, week_number=5, timezone="Europe/Paris")
+        due = creator.calculate_due_date("monday", 10, 0)
+        assert due.tzinfo is not None
+
+    def test_due_date_utc_offset_included(self, mock_client):
+        """Due date isoformat includes UTC offset (Trello needs explicit TZ)."""
+        creator = WeeklyListCreator(mock_client, week_number=5, timezone="Europe/Paris")
+        due = creator.calculate_due_date("monday", 10, 0)
+        iso = due.isoformat()
+        assert "+" in iso or iso.endswith("Z"), "ISO string must carry a UTC offset"
+
+    def test_due_date_wall_clock_matches_requested_time(self, mock_client):
+        """Due date wall-clock time matches the requested hour and minute."""
+        creator = WeeklyListCreator(mock_client, week_number=5, timezone="America/New_York")
+        due = creator.calculate_due_date("wednesday", 14, 30)
+        assert due.hour == 14
+        assert due.minute == 30
+
+    def test_dst_spring_forward_does_not_shift_hour(self, mock_client):
+        """Due date on a DST-transition week still shows the requested wall-clock time.
+
+        Europe/Paris springs forward from CET→CEST in late March. A card set for
+        10:00 on any day of that week must still appear as 10:00, not 11:00.
+        Week 13 of 2025 contains the spring-forward (30 Mar 2025).
+        """
+        creator = WeeklyListCreator(mock_client, week_number=13, timezone="Europe/Paris")
+        due = creator.calculate_due_date("sunday", 10, 0)
+        assert due.hour == 10
+        assert due.minute == 0
+
+    def test_default_timezone_is_utc(self, mock_client):
+        """Default timezone is UTC."""
+        creator = WeeklyListCreator(mock_client, week_number=1)
+        assert str(creator.timezone) == "UTC"
+
+    def test_timezone_from_env(self, mock_client):
+        """--timezone CLI argument and TIMEZONE env var are wired in parse_args."""
+        with patch('sys.argv', ['main.py', '--timezone', 'Asia/Tokyo']):
+            with patch.dict(os.environ, {}, clear=True):
+                args = parse_args()
+                assert args.timezone == "Asia/Tokyo"
+
+    def test_timezone_env_var_default(self, mock_client):
+        """TIMEZONE env var sets the default when no CLI flag given."""
+        with patch('sys.argv', ['main.py']):
+            with patch.dict(os.environ, {'TIMEZONE': 'America/Chicago'}):
+                args = parse_args()
+                assert args.timezone == "America/Chicago"
+
+    def test_dst_gap_raises_value_error(self, mock_client):
+        """calculate_due_date raises ValueError for a time inside a DST spring-forward gap.
+
+        Europe/Paris springs forward on 30 March 2025: clocks jump 02:00 → 03:00,
+        so 02:30 does not exist. The card config should be rejected at calculation
+        time rather than silently sending an ambiguous UTC instant to Trello.
+        """
+        creator = WeeklyListCreator(mock_client, week_number=13, timezone="Europe/Paris")
+        # Week 13 of 2025 contains Sunday 30 March (the spring-forward day)
+        with pytest.raises(ValueError, match="DST spring-forward gap"):
+            creator.calculate_due_date("sunday", 2, 30)
+
+    def test_normal_time_on_dst_week_is_accepted(self, mock_client):
+        """Times outside the gap on a DST-transition week are accepted normally."""
+        creator = WeeklyListCreator(mock_client, week_number=13, timezone="Europe/Paris")
+        due = creator.calculate_due_date("sunday", 4, 0)
+        assert due.hour == 4
