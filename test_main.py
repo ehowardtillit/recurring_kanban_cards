@@ -189,6 +189,24 @@ class TestTrelloAPIClient:
         result = client.add_checklist_item("checklist123", "Task item")
         assert result == "item123"
 
+    def test_close_session(self, client):
+        """close() shuts down the underlying HTTP session."""
+        client.session = Mock()
+        client.close()
+        client.session.close.assert_called_once()
+
+    @patch.object(TrelloAPIClient, '_make_request')
+    def test_get_board_labels_filters_unnamed(self, mock_request, client):
+        """get_board_labels excludes labels with no name."""
+        mock_request.return_value = [
+            {"name": "Work", "id": "id1"},
+            {"name": None, "id": "id2"},
+            {"name": "", "id": "id3"},
+            {"name": "Home", "id": "id4"},
+        ]
+        result = client.get_board_labels()
+        assert result == {"Work": "id1", "Home": "id4"}
+
 
 class TestWeeklyListCreator:
     """Tests for WeeklyListCreator."""
@@ -531,3 +549,65 @@ class TestWeekStartDay:
         # Friday should be day 6 of the week
         due = creator.calculate_due_date("friday", 10, 0)
         assert due.weekday() == 4  # Friday
+
+
+class TestSetupLogging:
+    """Tests for setup_logging."""
+
+    def test_no_duplicate_handlers(self, tmp_path):
+        """setup_logging is a no-op when the root logger already has handlers."""
+        import logging as _logging
+        root = _logging.getLogger()
+        # Clean slate
+        original_handlers = root.handlers[:]
+        original_level = root.level
+        try:
+            # Add a sentinel handler first
+            sentinel = _logging.NullHandler()
+            root.addHandler(sentinel)
+            handler_count_before = len(root.handlers)
+
+            # Calling setup_logging should not add more handlers
+            from main import setup_logging
+            setup_logging(tmp_path)
+
+            assert len(root.handlers) == handler_count_before
+        finally:
+            root.handlers[:] = original_handlers
+            root.level = original_level
+
+
+class TestMainSessionCleanup:
+    """Tests that main() always closes the API client."""
+
+    def _run_main(self, mock_client, create_weekly_list_side_effect=None):
+        """Helper: run main() with all dependencies mocked."""
+        from main import main
+
+        mock_creator = Mock()
+        if create_weekly_list_side_effect:
+            mock_creator.create_weekly_list.side_effect = create_weekly_list_side_effect
+
+        with patch('sys.argv', ['main.py', '--dry-run']), \
+             patch.dict(os.environ, {
+                 'TRELLO_API_KEY': 'k', 'TRELLO_API_TOKEN': 't', 'TRELLO_BOARD_ID': 'b'
+             }), \
+             patch('main.setup_logging'), \
+             patch('main.load_card_templates', return_value=[
+                 CardTemplate(title="T", day_of_week="monday", hour=9)
+             ]), \
+             patch('main.TrelloAPIClient', return_value=mock_client), \
+             patch('main.WeeklyListCreator', return_value=mock_creator):
+            return main()
+
+    def test_close_called_on_success(self):
+        """main() calls client.close() when create_weekly_list succeeds."""
+        mock_client = Mock()
+        self._run_main(mock_client)
+        mock_client.close.assert_called_once()
+
+    def test_close_called_on_exception(self):
+        """main() calls client.close() even when create_weekly_list raises."""
+        mock_client = Mock()
+        self._run_main(mock_client, create_weekly_list_side_effect=RuntimeError("boom"))
+        mock_client.close.assert_called_once()

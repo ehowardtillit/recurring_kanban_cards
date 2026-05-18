@@ -168,7 +168,7 @@ class TrelloAPIClient:
             method="GET",
             endpoint=f"boards/{self.config.board_id}/labels"
         )
-        return {label["name"]: label["id"] for label in labels}
+        return {label["name"]: label["id"] for label in labels if label.get("name")}
 
     def create_card(
         self,
@@ -218,6 +218,10 @@ class TrelloAPIClient:
             params={"name": name}
         )
         return data["id"]
+
+    def close(self) -> None:
+        """Close the underlying HTTP session."""
+        self.session.close()
 
 
 class WeeklyListCreator:
@@ -444,10 +448,13 @@ def load_card_templates(yaml_path: Path) -> List[CardTemplate]:
 
 def setup_logging(log_dir: Path) -> None:
     """Setup logging configuration with file and console handlers."""
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        return
+
     log_dir.mkdir(parents=True, exist_ok=True)
-    
     log_file = log_dir / f"trello_automation_{datetime.now().strftime('%Y%m%d')}.log"
-    
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -511,12 +518,15 @@ def main() -> int:
         
         # Create weekly list
         client = TrelloAPIClient(config)
-        creator = WeeklyListCreator(client, dry_run=args.dry_run, position=args.position, week_number=args.week, start_day=args.start_day)
-        creator.create_weekly_list(cards)
-        
+        try:
+            creator = WeeklyListCreator(client, dry_run=args.dry_run, position=args.position, week_number=args.week, start_day=args.start_day)
+            creator.create_weekly_list(cards)
+        finally:
+            client.close()
+
         logger.info("Weekly list creation completed successfully")
         return 0
-        
+
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
         return 1
