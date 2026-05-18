@@ -12,7 +12,7 @@ import logging
 import time
 from datetime import datetime, timedelta, time as dt_time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Protocol, runtime_checkable
 from pathlib import Path
 import yaml
 import requests
@@ -81,6 +81,29 @@ class CardTemplate:
         
         if not 0 <= self.minute <= 59:
             raise ValueError(f"Invalid minute: {self.minute}. Must be between 0 and 59")
+
+
+@runtime_checkable
+class KanbanClient(Protocol):
+    """Interface that any kanban backend (Trello, WeKan, …) must satisfy.
+
+    WeeklyListCreator depends only on this protocol, not on TrelloAPIClient
+    directly, so a second backend can be added without touching the creator.
+    """
+
+    def list_exists(self, name: str) -> bool: ...
+    def create_list(self, name: str, position: str = "top") -> str: ...
+    def get_board_labels(self) -> Dict[str, str]: ...
+    def create_card(
+        self,
+        list_id: str,
+        name: str,
+        due_date: datetime,
+        label_ids: List[str],
+        description: str = "",
+    ) -> str: ...
+    def create_checklist(self, card_id: str, name: str) -> str: ...
+    def add_checklist_item(self, checklist_id: str, name: str) -> str: ...
 
 
 class TrelloAPIClient:
@@ -261,11 +284,11 @@ class WeeklyListCreator:
         "friday": 6
     }
 
-    def __init__(self, client: TrelloAPIClient, dry_run: bool = False, position: str = "top", week_number: Optional[int] = None, start_day: str = "monday", timezone: str = "UTC"):
+    def __init__(self, client: KanbanClient, dry_run: bool = False, position: str = "top", week_number: Optional[int] = None, start_day: str = "monday", timezone: str = "UTC"):
         """Initialize the weekly list creator.
 
         Args:
-            client: Trello API client
+            client: Kanban backend implementing KanbanClient
             dry_run: If True, don't make actual API calls
             position: Position for new list ("top" or "bottom")
             week_number: Specific week number to create (None = current week)

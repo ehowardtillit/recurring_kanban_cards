@@ -14,6 +14,7 @@ from main import (
     TrelloConfig,
     CardTemplate,
     ChecklistTemplate,
+    KanbanClient,
     TrelloAPIClient,
     WeeklyListCreator,
     load_card_templates,
@@ -807,3 +808,39 @@ cards:
 
         call_params = mock_request.call_args[1]["params"]
         assert call_params["name"] == "Vérifier les données 検証"
+
+
+class TestKanbanClientProtocol:
+    """Tests for the KanbanClient protocol."""
+
+    def test_trello_client_satisfies_protocol(self):
+        """TrelloAPIClient is a structural subtype of KanbanClient."""
+        config = TrelloConfig(api_key="k", api_token="t", board_id="b")
+        client = TrelloAPIClient(config)
+        assert isinstance(client, KanbanClient)
+
+    def test_mock_satisfies_protocol_when_methods_present(self):
+        """An object with all required methods satisfies the protocol."""
+        mock = Mock(spec=TrelloAPIClient)
+        assert isinstance(mock, KanbanClient)
+
+    def test_arbitrary_object_does_not_satisfy_protocol(self):
+        """An object missing the required methods does not satisfy KanbanClient."""
+        assert not isinstance(object(), KanbanClient)
+
+    def test_weekly_list_creator_accepts_any_kanban_client(self):
+        """WeeklyListCreator works with any object implementing KanbanClient."""
+        class MinimalKanbanClient:
+            def list_exists(self, name): return False
+            def create_list(self, name, position="top"): return "list1"
+            def get_board_labels(self): return {}
+            def create_card(self, list_id, name, due_date, label_ids, description=""): return "card1"
+            def create_checklist(self, card_id, name): return "cl1"
+            def add_checklist_item(self, checklist_id, name): return "item1"
+
+        minimal = MinimalKanbanClient()
+        assert isinstance(minimal, KanbanClient)
+        creator = WeeklyListCreator(minimal)
+        creator.create_weekly_list([
+            CardTemplate(title="Test", day_of_week="monday", hour=10)
+        ])
