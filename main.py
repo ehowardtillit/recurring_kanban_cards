@@ -342,7 +342,16 @@ class WeeklyListCreator:
             day_offset = self.DAYS_FROM_SATURDAY[day_of_week.lower()]
 
         target_date = (week_start + timedelta(days=day_offset)).date()
-        return datetime.combine(target_date, dt_time(hour, minute), tzinfo=self.timezone)
+        due = datetime.combine(target_date, dt_time(hour, minute), tzinfo=self.timezone)
+        # Detect DST spring-forward gap: fold=0 and fold=1 have different UTC offsets,
+        # meaning this wall-clock time does not exist on this date.
+        if due.utcoffset() != due.replace(fold=1).utcoffset():
+            raise ValueError(
+                f"Time {hour:02d}:{minute:02d} does not exist on {target_date} in "
+                f"{self.timezone.key!r} due to a DST spring-forward gap. "
+                "Choose a different hour or minute for this card."
+            )
+        return due
 
     def resolve_label_ids(
         self,

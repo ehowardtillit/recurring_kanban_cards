@@ -4,7 +4,7 @@
 """Unit tests for Trello Weekly List Creator."""
 import pytest
 from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime, timedelta, timezone as dt_timezone
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 import tempfile
@@ -666,3 +666,21 @@ class TestTimezone:
             with patch.dict(os.environ, {'TIMEZONE': 'America/Chicago'}):
                 args = parse_args()
                 assert args.timezone == "America/Chicago"
+
+    def test_dst_gap_raises_value_error(self, mock_client):
+        """calculate_due_date raises ValueError for a time inside a DST spring-forward gap.
+
+        Europe/Paris springs forward on 30 March 2025: clocks jump 02:00 → 03:00,
+        so 02:30 does not exist. The card config should be rejected at calculation
+        time rather than silently sending an ambiguous UTC instant to Trello.
+        """
+        creator = WeeklyListCreator(mock_client, week_number=13, timezone="Europe/Paris")
+        # Week 13 of 2025 contains Sunday 30 March (the spring-forward day)
+        with pytest.raises(ValueError, match="DST spring-forward gap"):
+            creator.calculate_due_date("sunday", 2, 30)
+
+    def test_normal_time_on_dst_week_is_accepted(self, mock_client):
+        """Times outside the gap on a DST-transition week are accepted normally."""
+        creator = WeeklyListCreator(mock_client, week_number=13, timezone="Europe/Paris")
+        due = creator.calculate_due_date("sunday", 4, 0)
+        assert due.hour == 4
