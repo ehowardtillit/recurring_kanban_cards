@@ -684,3 +684,126 @@ class TestTimezone:
         creator = WeeklyListCreator(mock_client, week_number=13, timezone="Europe/Paris")
         due = creator.calculate_due_date("sunday", 4, 0)
         assert due.hour == 4
+
+
+class TestUTF8Support:
+    """Regression tests for UTF-8 in all user-visible string fields."""
+
+    def _yaml_file(self, content: str) -> Path:
+        """Write UTF-8 YAML to a temp file and return its path."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False, encoding='utf-8') as f:
+            f.write(content)
+            return Path(f.name)
+
+    def test_utf8_description(self):
+        """Description with accented characters round-trips correctly."""
+        path = self._yaml_file("""
+cards:
+  - title: "Task"
+    day_of_week: "monday"
+    hour: 9
+    description: "Réunion de l'équipe — résumé"
+""")
+        try:
+            cards = load_card_templates(path)
+            assert cards[0].description == "Réunion de l'équipe — résumé"
+        finally:
+            path.unlink()
+
+    def test_utf8_checklist_name(self):
+        """Checklist name with non-ASCII characters round-trips correctly."""
+        path = self._yaml_file("""
+cards:
+  - title: "Task"
+    day_of_week: "monday"
+    hour: 9
+    checklists:
+      - name: "Étapes à suivre"
+        items: []
+""")
+        try:
+            cards = load_card_templates(path)
+            assert cards[0].checklists[0].name == "Étapes à suivre"
+        finally:
+            path.unlink()
+
+    def test_utf8_checklist_items(self):
+        """Checklist items with non-ASCII characters (French, German, Japanese) round-trip correctly."""
+        path = self._yaml_file("""
+cards:
+  - title: "Task"
+    day_of_week: "monday"
+    hour: 9
+    checklists:
+      - name: "Steps"
+        items:
+          - "Vérifier les données"
+          - "Überprüfen Sie die Daten"
+          - "日本語テスト"
+""")
+        try:
+            cards = load_card_templates(path)
+            items = cards[0].checklists[0].items
+            assert items == ["Vérifier les données", "Überprüfen Sie die Daten", "日本語テスト"]
+        finally:
+            path.unlink()
+
+    def test_utf8_label_names(self):
+        """Label names with non-ASCII characters round-trip correctly."""
+        path = self._yaml_file("""
+cards:
+  - title: "Task"
+    day_of_week: "monday"
+    hour: 9
+    labels:
+      - "Müsli & Käse"
+      - "Fiançailles"
+""")
+        try:
+            cards = load_card_templates(path)
+            assert cards[0].labels == ["Müsli & Käse", "Fiançailles"]
+        finally:
+            path.unlink()
+
+    @patch.object(TrelloAPIClient, '_make_request')
+    def test_utf8_card_name_and_description_reach_api(self, mock_request):
+        """create_card passes UTF-8 title and description to the API unchanged."""
+        config = TrelloConfig(api_key="k", api_token="t", board_id="b")
+        client = TrelloAPIClient(config)
+        mock_request.return_value = {"id": "card1"}
+
+        client.create_card(
+            list_id="list1",
+            name="Réunion d'équipe 会議",
+            due_date=datetime(2026, 3, 2, 10, 0),
+            label_ids=[],
+            description="Résumé de la réunion — Zusammenfassung",
+        )
+
+        call_params = mock_request.call_args[1]["params"]
+        assert call_params["name"] == "Réunion d'équipe 会議"
+        assert call_params["desc"] == "Résumé de la réunion — Zusammenfassung"
+
+    @patch.object(TrelloAPIClient, '_make_request')
+    def test_utf8_checklist_name_reaches_api(self, mock_request):
+        """create_checklist passes a UTF-8 name to the API unchanged."""
+        config = TrelloConfig(api_key="k", api_token="t", board_id="b")
+        client = TrelloAPIClient(config)
+        mock_request.return_value = {"id": "cl1"}
+
+        client.create_checklist("card1", "Étapes à suivre")
+
+        call_params = mock_request.call_args[1]["params"]
+        assert call_params["name"] == "Étapes à suivre"
+
+    @patch.object(TrelloAPIClient, '_make_request')
+    def test_utf8_checklist_item_reaches_api(self, mock_request):
+        """add_checklist_item passes a UTF-8 item name to the API unchanged."""
+        config = TrelloConfig(api_key="k", api_token="t", board_id="b")
+        client = TrelloAPIClient(config)
+        mock_request.return_value = {"id": "item1"}
+
+        client.add_checklist_item("cl1", "Vérifier les données 検証")
+
+        call_params = mock_request.call_args[1]["params"]
+        assert call_params["name"] == "Vérifier les données 検証"
