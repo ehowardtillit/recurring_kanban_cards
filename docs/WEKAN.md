@@ -60,7 +60,10 @@ Once `WeKanAPIClient` is implemented, pass it to `WeeklyListCreator`:
 
 ```python
 client = WeKanAPIClient(base_url="http://wekan.local", username="...", password="...")
-creator = WeeklyListCreator(client, timezone="Europe/Paris", ...)
+# Pass start_day and any other WeeklyListCreator options as needed.
+# The timezone parameter becomes available after feat/timezone-aware-dates is merged;
+# without it, due dates default to UTC.
+creator = WeeklyListCreator(client, start_day="monday")
 creator.create_weekly_list(cards)
 ```
 
