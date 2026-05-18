@@ -10,7 +10,8 @@ import os
 import sys
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import List, Dict, Optional, Any
 from pathlib import Path
 import yaml
@@ -260,15 +261,16 @@ class WeeklyListCreator:
         "friday": 6
     }
 
-    def __init__(self, client: TrelloAPIClient, dry_run: bool = False, position: str = "top", week_number: Optional[int] = None, start_day: str = "monday"):
+    def __init__(self, client: TrelloAPIClient, dry_run: bool = False, position: str = "top", week_number: Optional[int] = None, start_day: str = "monday", timezone: str = "UTC"):
         """Initialize the weekly list creator.
-        
+
         Args:
             client: Trello API client
             dry_run: If True, don't make actual API calls
             position: Position for new list ("top" or "bottom")
             week_number: Specific week number to create (None = current week)
-            start_day: First day of week ("sunday" or "monday")
+            start_day: First day of week ("saturday", "sunday", or "monday")
+            timezone: IANA timezone name for due dates (e.g. "Europe/Paris")
         """
         self.client = client
         self.dry_run = dry_run
@@ -277,78 +279,70 @@ class WeeklyListCreator:
         self.start_day = start_day.lower()
         if self.start_day not in ("saturday", "sunday", "monday"):
             raise ValueError(f"Invalid start_day: {start_day}. Must be 'saturday', 'sunday', or 'monday'")
+        try:
+            self.timezone = ZoneInfo(timezone)
+        except ZoneInfoNotFoundError:
+            raise ValueError(f"Invalid timezone: {timezone!r}. Use an IANA name such as 'Europe/Paris'.")
         self.logger = logging.getLogger(__name__)
+
+    def _now(self) -> datetime:
+        """Return current time in the configured timezone."""
+        return datetime.now(self.timezone)
 
     def get_current_week_number(self) -> int:
         """Get the week number for the current week based on start_day setting."""
-        today = datetime.now()
-        
+        today = self._now()
+
         if self.start_day == "monday":
-            # ISO week number (Monday start)
             return today.isocalendar()[1]
         elif self.start_day == "sunday":
-            # Sunday-based week: if today is Sunday, it's already the new week
-            # Shift by 1 day to align with US calendar convention
             adjusted = today + timedelta(days=1)
             return adjusted.isocalendar()[1]
         else:
-            # Saturday-based week: if today is Saturday, it's already the new week
-            # Shift by 2 days to align with Saturday start convention
             adjusted = today + timedelta(days=2)
             return adjusted.isocalendar()[1]
 
     def get_week_start(self, week_number: Optional[int] = None) -> datetime:
-        """Get the datetime for the start of the specified week.
-        
+        """Get the date of the first day of the specified week (midnight, no timezone).
+
         If week_number is None, returns the start of the current week.
-        Start day depends on start_day setting (Sunday or Monday).
         """
-        today = datetime.now()
-        
+        today = self._now()
+
         if week_number is None:
             week_number = self.get_current_week_number()
-        
+
+        current_year = today.isocalendar()[0]
+        jan4 = datetime(current_year, 1, 4)
+        jan4_weekday = jan4.weekday()  # Monday = 0
+        week1_monday = jan4 - timedelta(days=jan4_weekday)
+
         if self.start_day == "monday":
-            # ISO week calculation (Monday start)
-            current_year = today.isocalendar()[0]
-            jan4 = datetime(current_year, 1, 4)
-            jan4_weekday = jan4.weekday()  # Monday = 0
-            week1_monday = jan4 - timedelta(days=jan4_weekday)
             target_start = week1_monday + timedelta(weeks=week_number - 1)
         elif self.start_day == "sunday":
-            # Sunday-based week calculation
-            current_year = today.isocalendar()[0]
-            jan4 = datetime(current_year, 1, 4)
-            jan4_weekday = jan4.weekday()  # Monday = 0
-            week1_monday = jan4 - timedelta(days=jan4_weekday)
-            # Go back 1 day to get Sunday
-            week1_sunday = week1_monday - timedelta(days=1)
-            target_start = week1_sunday + timedelta(weeks=week_number - 1)
+            target_start = week1_monday - timedelta(days=1) + timedelta(weeks=week_number - 1)
         else:
-            # Saturday-based week calculation
-            current_year = today.isocalendar()[0]
-            jan4 = datetime(current_year, 1, 4)
-            jan4_weekday = jan4.weekday()  # Monday = 0
-            week1_monday = jan4 - timedelta(days=jan4_weekday)
-            # Go back 2 days to get Saturday
-            week1_saturday = week1_monday - timedelta(days=2)
-            target_start = week1_saturday + timedelta(weeks=week_number - 1)
-        
+            target_start = week1_monday - timedelta(days=2) + timedelta(weeks=week_number - 1)
+
         return target_start.replace(hour=0, minute=0, second=0, microsecond=0)
 
     def calculate_due_date(self, day_of_week: str, hour: int, minute: int = 0) -> datetime:
-        """Calculate the due date for a card based on day of week, hour, and minute."""
+        """Calculate the timezone-aware due date for a card.
+
+        Constructs the datetime by combining the target date with a wall-clock
+        time so that DST transitions do not shift the result by an hour.
+        """
         week_start = self.get_week_start(self.week_number)
-        
+
         if self.start_day == "monday":
             day_offset = self.DAYS_FROM_MONDAY[day_of_week.lower()]
         elif self.start_day == "sunday":
             day_offset = self.DAYS_FROM_SUNDAY[day_of_week.lower()]
         else:
             day_offset = self.DAYS_FROM_SATURDAY[day_of_week.lower()]
-        
-        due_date = week_start + timedelta(days=day_offset, hours=hour, minutes=minute)
-        return due_date
+
+        target_date = (week_start + timedelta(days=day_offset)).date()
+        return datetime.combine(target_date, dt_time(hour, minute), tzinfo=self.timezone)
 
     def resolve_label_ids(
         self,
@@ -491,6 +485,12 @@ def parse_args() -> argparse.Namespace:
         default=os.getenv("WEEK_START_DAY", "monday").lower(),
         help="First day of the week (default: monday, or WEEK_START_DAY env var)"
     )
+    parser.add_argument(
+        "--timezone",
+        default=os.getenv("TIMEZONE", "UTC"),
+        metavar="TZ",
+        help="IANA timezone for due dates, e.g. Europe/Paris (default: UTC, or TIMEZONE env var)"
+    )
     return parser.parse_args()
 
 
@@ -519,7 +519,14 @@ def main() -> int:
         # Create weekly list
         client = TrelloAPIClient(config)
         try:
-            creator = WeeklyListCreator(client, dry_run=args.dry_run, position=args.position, week_number=args.week, start_day=args.start_day)
+            creator = WeeklyListCreator(
+                client,
+                dry_run=args.dry_run,
+                position=args.position,
+                week_number=args.week,
+                start_day=args.start_day,
+                timezone=args.timezone,
+            )
             creator.create_weekly_list(cards)
         finally:
             client.close()
