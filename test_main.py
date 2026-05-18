@@ -189,6 +189,24 @@ class TestTrelloAPIClient:
         result = client.add_checklist_item("checklist123", "Task item")
         assert result == "item123"
 
+    def test_close_session(self, client):
+        """close() shuts down the underlying HTTP session."""
+        client.session = Mock()
+        client.close()
+        client.session.close.assert_called_once()
+
+    @patch.object(TrelloAPIClient, '_make_request')
+    def test_get_board_labels_filters_unnamed(self, mock_request, client):
+        """get_board_labels excludes labels with no name."""
+        mock_request.return_value = [
+            {"name": "Work", "id": "id1"},
+            {"name": None, "id": "id2"},
+            {"name": "", "id": "id3"},
+            {"name": "Home", "id": "id4"},
+        ]
+        result = client.get_board_labels()
+        assert result == {"Work": "id1", "Home": "id4"}
+
 
 class TestWeeklyListCreator:
     """Tests for WeeklyListCreator."""
